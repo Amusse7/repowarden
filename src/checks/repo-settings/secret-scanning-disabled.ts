@@ -1,3 +1,4 @@
+import { ADMINISTRATION_READ_PERMISSION, PermissionError } from '../../core/github-client.js';
 import type { Check, CheckContext, Finding } from '../../core/types.js';
 import { buildFindingId } from '../../core/types.js';
 
@@ -15,9 +16,10 @@ export const secretScanningDisabledCheck: Check = {
     // the repo. That's an undetermined state, not a clean result — surface it
     // as an error rather than silently reporting "secret scanning is fine".
     if (securityAndAnalysis === undefined || securityAndAnalysis === null) {
-      throw new Error(
+      throw new PermissionError(
         `Cannot determine secret scanning status for ${context.owner}/${context.repo}: the GitHub API did not ` +
           'return security_and_analysis data. This usually means the token lacks admin access to the repository.',
+        ADMINISTRATION_READ_PERMISSION,
       );
     }
 

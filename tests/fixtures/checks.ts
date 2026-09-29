@@ -1,3 +1,4 @@
+import { PermissionError } from '../../src/core/github-client.js';
 import type { Check, CheckContext, Finding } from '../../src/core/types.js';
 import { buildFindingId } from '../../src/core/types.js';
 
@@ -60,6 +61,17 @@ export const rejectingCheck: Check = {
     throw new Error('asynchronous failure');
   },
 };
+
+export function makePermissionErrorCheck(id: string, requiredPermission: string): Check {
+  return {
+    id,
+    name: `Permission Error Check (${id})`,
+    category: 'repo-settings',
+    run: (_context: CheckContext): Promise<Finding[]> => {
+      throw new PermissionError(`${id} needs a permission it doesn't have`, requiredPermission);
+    },
+  };
+}
 
 export function makeSlowCheck(delayMs: number): Check {
   return {

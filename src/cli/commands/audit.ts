@@ -8,12 +8,17 @@ import type { CheckError, RunnerResult } from '../../core/runner.js';
 import { SEVERITY_WEIGHT } from '../../core/types.js';
 import type { Finding, Severity } from '../../core/types.js';
 
+interface AuditCommandOptions {
+  verbose?: boolean;
+}
+
 export function registerAuditCommand(program: Command): void {
   program
     .command('audit')
     .argument('<owner/repo>', 'GitHub repository to audit, e.g. octocat/hello-world')
+    .option('--verbose', 'print Octokit warning/error log output to stderr (silenced by default)')
     .description('Run security checks against a GitHub repository')
-    .action(async (ownerRepo: string) => {
+    .action(async (ownerRepo: string, options: AuditCommandOptions) => {
       // Only the CLI loads .env / reads process.env. Core never touches either.
       dotenv.config();
 
@@ -32,7 +37,7 @@ export function registerAuditCommand(program: Command): void {
       }
 
       const { owner, repo } = parsed;
-      const client = new GitHubClient(token);
+      const client = new GitHubClient(token, { verbose: options.verbose ?? false });
       const context = createCheckContext(owner, repo, client);
 
       try {
@@ -66,8 +71,8 @@ function printSummary(owner: string, repo: string, result: RunnerResult): void {
 
   if (result.errors.length > 0) {
     console.log('\nAUDIT INCOMPLETE — the following checks failed to run:');
-    for (const e of result.errors) {
-      printFailedCheck(e);
+    for (const line of formatFailedChecks(result.errors)) {
+      console.log(line);
     }
   }
 
@@ -88,8 +93,40 @@ function printSummary(owner: string, repo: string, result: RunnerResult): void {
   console.log('');
 }
 
-function printFailedCheck(e: CheckError): void {
-  console.log(`  - ${e.checkName} (${e.checkId}): ${e.message}`);
+/**
+ * Errors sharing the same requiredPermission (e.g. several checks all 403'd
+ * on branch protection because the token lacks admin access) are grouped
+ * into one summary line instead of repeating the same message per check.
+ * Errors without a requiredPermission — genuinely distinct failures — still
+ * list individually. Returns plain lines (no console side effect) so the
+ * grouping logic itself is unit-testable.
+ */
+export function formatFailedChecks(errors: CheckError[]): string[] {
+  const permissionGroups = new Map<string, CheckError[]>();
+  const individual: CheckError[] = [];
+
+  for (const e of errors) {
+    if (e.requiredPermission) {
+      const group = permissionGroups.get(e.requiredPermission) ?? [];
+      group.push(e);
+      permissionGroups.set(e.requiredPermission, group);
+    } else {
+      individual.push(e);
+    }
+  }
+
+  const lines: string[] = [];
+
+  for (const [permission, group] of permissionGroups) {
+    const checkWord = group.length === 1 ? 'check requires' : 'checks require';
+    lines.push(`  - ${group.length} ${checkWord} admin access to this repository (${permission})`);
+  }
+
+  for (const e of individual) {
+    lines.push(`  - ${e.checkName} (${e.checkId}): ${e.message}`);
+  }
+
+  return lines;
 }
 
 function printFinding(finding: Finding): void {

@@ -84,6 +84,18 @@ one check (vulnerability alerts, workflow permissions, `SECURITY.md`
 presence) is fetched directly via `context.client.getX(...)` inside that
 check — no caching needed, and it keeps unused data from ever being fetched.
 
+**Not every 404 unambiguously means "off."** `GET /repos/{owner}/{repo}/vulnerability-alerts`
+returns 404 for *both* "alerts disabled" and "token lacks admin access to know" —
+unlike branch protection's 404, which really does mean "no rule." Where a 404
+is ambiguous like this, `GitHubClientLike` returns the raw ambiguous value
+(`getVulnerabilityAlertsEnabled` returns `false` for both cases) and the
+*check* — not the client — resolves the ambiguity using another signal it
+already has, here `context.repoData().permissions?.admin`. See
+`vulnerability-alerts-disabled.ts`: only when `permissions.admin === true` is
+`false` trusted as "disabled"; otherwise it throws a `PermissionError` (never
+a finding, never `[]`). Apply the same reasoning before adding any new
+`GitHubClientLike` method that collapses a 404 to a boolean.
+
 ### Runner
 
 `runChecks(checks, context, options?)` (`src/core/runner.ts`) runs every
@@ -98,7 +110,11 @@ check in parallel via `Promise.allSettled`, isolating failures:
 
 Returns `{ findings, errors }` — kept as **separate arrays on purpose**, not
 merged into a single list. `findings` are sorted most-severe-first. `errors`
-is `{ checkId, checkName, message }[]`, one entry per failed/timed-out check.
+is `{ checkId, checkName, message, requiredPermission? }[]`, one entry per
+failed/timed-out check. `requiredPermission` is populated automatically when
+the rejection was a `PermissionError` — checks don't need to do anything
+special to get grouped in the CLI's summary beyond throwing `PermissionError`
+instead of a plain `Error` (see GitHubClient section below).
 
 **A failed check must never look like a clean result.** Any caller printing a
 summary (the CLI today; MCP/Action later) must check `errors.length > 0`
@@ -135,6 +151,29 @@ only catch-and-return-a-value for the specific status code that means
 "absent," never for a broad `catch { return false }` that would also swallow
 403s and other real failures.
 
+**`PermissionError`** (also in `src/core/github-client.ts`) is a distinct
+error type — not just a `GitHubClientError` with a certain message — thrown
+when a failure is specifically "the token lacks GitHub permission X." It
+carries a `requiredPermission: string`. Two endpoints known to require the
+repo's "Administration" permission (`getBranchProtection`,
+`getWorkflowPermissions`) route their plain-403 case through
+`translateGitHubErrorWithPermission(err, owner, repo, ADMINISTRATION_READ_PERMISSION)`
+instead of `translateGitHubError`, upgrading a bare 403 into a
+`PermissionError`. `ADMINISTRATION_READ_PERMISSION` is a shared exported
+constant (`'Administration: read'`) — reuse it (don't retype the string
+literal) whenever a new call site needs the same permission, so occurrences
+group correctly in the CLI. Checks that throw their own "can't determine
+this" error for the same underlying reason (`secret-scanning-disabled`,
+`vulnerability-alerts-disabled`) throw `PermissionError` directly rather than
+a plain `Error`, for the same reason.
+
+**Octokit's own logging is silenced by default.** The constructor takes a
+`GitHubClientOptions` with `verbose?: boolean` (default `false`); when false,
+Octokit's `warn`/`error` log callbacks are no-ops, so deprecation notices and
+throttling warnings never leak into audit output. When `true`, they're
+printed to stderr prefixed `[octokit]`. The CLI exposes this as `--verbose`
+on `audit`.
+
 Method types are derived from Octokit's own generated types
 (`RestEndpointMethodTypes[...]['response']['data']`, re-exported as
 `RepoData` / `BranchProtection` / `WorkflowPermissions`) rather than
@@ -145,12 +184,19 @@ nullable; `enforce_admins` and `required_pull_request_reviews` both require a
 
 ## CLI
 
-`repowarden audit <owner/repo>`:
+`repowarden audit <owner/repo> [--verbose]`:
 1. Loads `.env` (CLI-only — see above), reads `GITHUB_TOKEN`.
-2. Constructs `GitHubClient`, runs the (currently empty) check registry.
+2. Constructs `GitHubClient` (passing `--verbose` through), runs the check registry.
 3. Prints a summary: if `errors.length > 0`, prints `AUDIT INCOMPLETE` with
-   the list of failed checks, *before* the findings summary — the failure
-   must be the first thing the user sees, not buried after a findings count.
+   the failed checks, *before* the findings summary — the failure must be the
+   first thing the user sees, not buried after a findings count.
+   `formatFailedChecks` (`src/cli/commands/audit.ts`, exported for testing)
+   groups errors that share a `requiredPermission` into one line — e.g. "6
+   checks require admin access to this repository (Administration: read)" —
+   instead of repeating the same message per check; errors without one still
+   list individually. It's a pure function returning lines, not doing the
+   `console.log` itself, specifically so the grouping logic is unit-testable
+   without capturing stdout.
 4. Exit code is non-zero if there are any check errors, **or** any
    critical/high finding. Errors force non-zero even with zero findings.
 

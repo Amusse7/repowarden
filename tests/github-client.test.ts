@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { GitHubClient, GitHubClientError, translateGitHubError } from '../src/core/github-client.js';
+import {
+  GitHubClient,
+  GitHubClientError,
+  PermissionError,
+  translateGitHubError,
+  translateGitHubErrorWithPermission,
+} from '../src/core/github-client.js';
 
 describe('GitHubClient constructor', () => {
   it('throws when constructed without a token', () => {
@@ -14,6 +20,11 @@ describe('GitHubClient constructor', () => {
     } finally {
       if (original !== undefined) process.env['GITHUB_TOKEN'] = original;
     }
+  });
+
+  it('accepts a verbose option without throwing, for either value', () => {
+    expect(() => new GitHubClient('explicit-token', { verbose: true })).not.toThrow();
+    expect(() => new GitHubClient('explicit-token', { verbose: false })).not.toThrow();
   });
 });
 
@@ -53,5 +64,35 @@ describe('translateGitHubError', () => {
   it('passes through non-Octokit errors unchanged', () => {
     const original = new Error('network exploded');
     expect(translateGitHubError(original, 'octocat', 'hello-world')).toBe(original);
+  });
+});
+
+describe('translateGitHubErrorWithPermission', () => {
+  it('upgrades a plain 403 into a PermissionError carrying the given permission', () => {
+    const err = { status: 403 };
+    const translated = translateGitHubErrorWithPermission(err, 'octocat', 'hello-world', 'Administration: read');
+
+    expect(translated).toBeInstanceOf(PermissionError);
+    expect((translated as PermissionError).requiredPermission).toBe('Administration: read');
+    expect(translated.message).toMatch(/forbidden/i);
+  });
+
+  it('does not upgrade a 403 rate-limit exhaustion into a PermissionError', () => {
+    const err = {
+      status: 403,
+      response: { headers: { 'x-ratelimit-remaining': '0' } },
+    };
+    const translated = translateGitHubErrorWithPermission(err, 'octocat', 'hello-world', 'Administration: read');
+
+    expect(translated).not.toBeInstanceOf(PermissionError);
+    expect(translated.message).toMatch(/rate limit exceeded/i);
+  });
+
+  it('does not upgrade a 404 into a PermissionError', () => {
+    const err = { status: 404 };
+    const translated = translateGitHubErrorWithPermission(err, 'octocat', 'hello-world', 'Administration: read');
+
+    expect(translated).not.toBeInstanceOf(PermissionError);
+    expect(translated).toBeInstanceOf(GitHubClientError);
   });
 });

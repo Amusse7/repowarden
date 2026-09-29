@@ -1,3 +1,4 @@
+import { PermissionError } from './github-client.js';
 import type { Check, CheckContext, Finding } from './types.js';
 import { SEVERITY_WEIGHT } from './types.js';
 
@@ -5,6 +6,8 @@ export interface CheckError {
   checkId: string;
   checkName: string;
   message: string;
+  /** Set when the failure was a PermissionError, naming the missing GitHub permission — lets callers group repeated occurrences instead of listing each check individually. */
+  requiredPermission?: string;
 }
 
 export interface RunnerResult {
@@ -45,10 +48,12 @@ export async function runChecks(
     if (result.status === 'fulfilled') {
       findings.push(...result.value);
     } else {
+      const reason: unknown = result.reason;
       errors.push({
         checkId: check.id,
         checkName: check.name,
-        message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        message: reason instanceof Error ? reason.message : String(reason),
+        requiredPermission: reason instanceof PermissionError ? reason.requiredPermission : undefined,
       });
     }
   });

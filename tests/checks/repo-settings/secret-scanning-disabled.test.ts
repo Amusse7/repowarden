@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { secretScanningDisabledCheck } from '../../../src/checks/repo-settings/secret-scanning-disabled.js';
+import { PermissionError } from '../../../src/core/github-client.js';
 import { makeTestContext } from '../../fixtures/context.js';
 import { makeFakeClient, makeFakeRepoData } from '../../fixtures/github-client.js';
 
@@ -48,6 +49,7 @@ describe('secretScanningDisabledCheck', () => {
     const context = makeTestContext(makeFakeClient({ getRepo: () => Promise.resolve(repo) }));
 
     await expect(secretScanningDisabledCheck.run(context)).rejects.toThrow(/security_and_analysis/);
+    await expect(secretScanningDisabledCheck.run(context)).rejects.toThrow(PermissionError);
   });
 
   it('throws instead of returning a finding when security_and_analysis is null', async () => {
