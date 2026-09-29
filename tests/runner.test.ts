@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { runChecks } from '../src/core/runner.js';
-import { GitHubClient } from '../src/core/github-client.js';
-import type { CheckContext } from '../src/core/types.js';
 import {
   dummyCheck,
   makeSeverityCheck,
@@ -9,12 +7,9 @@ import {
   rejectingCheck,
   throwingCheck,
 } from './fixtures/checks.js';
+import { makeTestContext } from './fixtures/context.js';
 
-const context: CheckContext = {
-  owner: 'octocat',
-  repo: 'hello-world',
-  client: new GitHubClient('fake-token-for-tests'),
-};
+const context = makeTestContext();
 
 describe('runChecks', () => {
   it('returns empty results for an empty check list', async () => {

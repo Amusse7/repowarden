@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { GitHubClient } from './github-client.js';
+import type { BranchProtection, GitHubClientLike, RepoData } from './github-client.js';
 
 export const SeveritySchema = z.enum(['critical', 'high', 'medium', 'low', 'info']);
 export type Severity = z.infer<typeof SeveritySchema>;
@@ -48,7 +48,11 @@ export function buildFindingId(checkId: string, location?: FileLocation): string
 export interface CheckContext {
   owner: string;
   repo: string;
-  client: GitHubClient;
+  client: GitHubClientLike;
+  /** Fetched at most once per audit run and shared across every check that calls it. */
+  repoData(): Promise<RepoData>;
+  /** Null means no protection rule exists (404) — that itself is a finding, not an error. A 403 or other failure rejects instead. */
+  branchProtection(): Promise<BranchProtection | null>;
 }
 
 export interface Check {
