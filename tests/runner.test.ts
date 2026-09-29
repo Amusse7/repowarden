@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { runChecks } from '../src/core/runner.js';
 import {
   dummyCheck,
+  makePermissionErrorCheck,
   makeSeverityCheck,
   makeSlowCheck,
   rejectingCheck,
@@ -61,6 +62,23 @@ describe('runChecks', () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.checkId).toBe('slow-check');
     expect(result.errors[0]?.message).toMatch(/timed out after 10ms/);
+  });
+
+  it('carries requiredPermission from a PermissionError into the CheckError', async () => {
+    const check = makePermissionErrorCheck('needs-admin', 'Administration: read');
+    const result = await runChecks([check], context);
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({
+      checkId: 'needs-admin',
+      requiredPermission: 'Administration: read',
+    });
+  });
+
+  it('leaves requiredPermission undefined for a plain error', async () => {
+    const result = await runChecks([throwingCheck], context);
+
+    expect(result.errors[0]?.requiredPermission).toBeUndefined();
   });
 
   it('sorts findings by severity, most severe first', async () => {
