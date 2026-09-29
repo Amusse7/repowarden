@@ -1,7 +1,13 @@
 import { Octokit } from '@octokit/rest';
 import { throttling } from '@octokit/plugin-throttling';
+import type { RestEndpointMethodTypes } from '@octokit/rest';
 
 const ThrottledOctokit = Octokit.plugin(throttling);
+
+export type RepoData = RestEndpointMethodTypes['repos']['get']['response']['data'];
+export type BranchProtection = RestEndpointMethodTypes['repos']['getBranchProtection']['response']['data'];
+export type WorkflowPermissions =
+  RestEndpointMethodTypes['actions']['getGithubActionsDefaultWorkflowPermissionsRepository']['response']['data'];
 
 /** A GitHub API error translated into a clear, actionable message. */
 export class GitHubClientError extends Error {
@@ -51,12 +57,32 @@ export function translateGitHubError(err: unknown, owner: string, repo: string):
 }
 
 /**
+ * The subset of GitHubClient that checks and CheckContext depend on. Checks
+ * are written against this interface, never the concrete Octokit-backed
+ * class, so tests can supply plain object doubles instead of mocking Octokit.
+ */
+export interface GitHubClientLike {
+  getRepo(owner: string, repo: string): Promise<RepoData>;
+
+  /** Returns null on 404 (no protection rule) — the caller decides whether that's a finding. Throws on 403 and other failures. */
+  getBranchProtection(owner: string, repo: string, branch: string): Promise<BranchProtection | null>;
+
+  /** Returns false on 404 (alerts disabled). Throws on 403 and other failures — a 403 must never read as "disabled". */
+  getVulnerabilityAlertsEnabled(owner: string, repo: string): Promise<boolean>;
+
+  getWorkflowPermissions(owner: string, repo: string): Promise<WorkflowPermissions>;
+
+  /** Returns false on 404 (path doesn't exist). Throws on 403 and other failures. */
+  getContentExists(owner: string, repo: string, path: string): Promise<boolean>;
+}
+
+/**
  * Thin wrapper around Octokit. Owns rate-limit handling and translates
  * common HTTP failures into clear errors; callers never see raw Octokit
  * exceptions. Never reads environment variables or .env files itself — the
  * caller (CLI, MCP server, Action) is responsible for sourcing the token.
  */
-export class GitHubClient {
+export class GitHubClient implements GitHubClientLike {
   private readonly octokit: InstanceType<typeof ThrottledOctokit>;
 
   constructor(token: string) {
@@ -67,27 +93,69 @@ export class GitHubClient {
     this.octokit = new ThrottledOctokit({
       auth: token,
       throttle: {
-        onRateLimit: (retryAfter, options, _octokit, retryCount) => {
-          if (retryCount < 1) {
-            return true;
-          }
-          return false;
+        onRateLimit: (_retryAfter, _options, _octokit, retryCount) => {
+          return retryCount < 1;
         },
-        onSecondaryRateLimit: (retryAfter, options, _octokit, retryCount) => {
-          if (retryCount < 1) {
-            return true;
-          }
-          return false;
+        onSecondaryRateLimit: (_retryAfter, _options, _octokit, retryCount) => {
+          return retryCount < 1;
         },
       },
     });
   }
 
-  async getRepo(owner: string, repo: string): Promise<Awaited<ReturnType<Octokit['repos']['get']>>['data']> {
+  async getRepo(owner: string, repo: string): Promise<RepoData> {
     try {
       const { data } = await this.octokit.repos.get({ owner, repo });
       return data;
     } catch (err) {
+      throw translateGitHubError(err, owner, repo);
+    }
+  }
+
+  async getBranchProtection(owner: string, repo: string, branch: string): Promise<BranchProtection | null> {
+    try {
+      const { data } = await this.octokit.repos.getBranchProtection({ owner, repo, branch });
+      return data;
+    } catch (err) {
+      if (isOctokitErrorLike(err) && err.status === 404) {
+        return null;
+      }
+      throw translateGitHubError(err, owner, repo);
+    }
+  }
+
+  async getVulnerabilityAlertsEnabled(owner: string, repo: string): Promise<boolean> {
+    try {
+      await this.octokit.repos.checkVulnerabilityAlerts({ owner, repo });
+      return true;
+    } catch (err) {
+      if (isOctokitErrorLike(err) && err.status === 404) {
+        return false;
+      }
+      throw translateGitHubError(err, owner, repo);
+    }
+  }
+
+  async getWorkflowPermissions(owner: string, repo: string): Promise<WorkflowPermissions> {
+    try {
+      const { data } = await this.octokit.actions.getGithubActionsDefaultWorkflowPermissionsRepository({
+        owner,
+        repo,
+      });
+      return data;
+    } catch (err) {
+      throw translateGitHubError(err, owner, repo);
+    }
+  }
+
+  async getContentExists(owner: string, repo: string, path: string): Promise<boolean> {
+    try {
+      await this.octokit.repos.getContent({ owner, repo, path });
+      return true;
+    } catch (err) {
+      if (isOctokitErrorLike(err) && err.status === 404) {
+        return false;
+      }
       throw translateGitHubError(err, owner, repo);
     }
   }

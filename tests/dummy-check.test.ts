@@ -1,13 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { GitHubClient } from '../src/core/github-client.js';
-import type { CheckContext } from '../src/core/types.js';
 import { dummyCheck, findingWithLocationCheck } from './fixtures/checks.js';
+import { makeTestContext } from './fixtures/context.js';
 
-const context: CheckContext = {
-  owner: 'octocat',
-  repo: 'hello-world',
-  client: new GitHubClient('fake-token-for-tests'),
-};
+const context = makeTestContext();
 
 describe('dummyCheck fixture', () => {
   it('conforms to the Check interface and returns a well-formed Finding', async () => {

@@ -1,6 +1,7 @@
 import type { Command } from 'commander';
 import dotenv from 'dotenv';
 import { checks } from '../../checks/index.js';
+import { createCheckContext } from '../../core/context.js';
 import { GitHubClient, GitHubClientError } from '../../core/github-client.js';
 import { runChecks } from '../../core/runner.js';
 import type { CheckError, RunnerResult } from '../../core/runner.js';
@@ -32,9 +33,10 @@ export function registerAuditCommand(program: Command): void {
 
       const { owner, repo } = parsed;
       const client = new GitHubClient(token);
+      const context = createCheckContext(owner, repo, client);
 
       try {
-        const result = await runChecks(checks, { owner, repo, client });
+        const result = await runChecks(checks, context);
         printSummary(owner, repo, result);
         process.exitCode = determineExitCode(result);
       } catch (err) {
